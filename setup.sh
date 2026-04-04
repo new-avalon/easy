@@ -156,6 +156,13 @@ reboot_ssh() {
 
 configure_notifications() {
     print_header "Создание скрипта уведомлений"
+    # Проверка: если хотя бы один токен пуст → ошибка
+    if [ -z "$TG_BOT_TOKEN" ] || [ -z "$TG_CHAT_ID" ]; then
+        echo "Уведомления не будут созданы"
+        # TODO: удалять файлы
+        return 0
+    fi
+
     # 1. Создание скрипта уведомлений
     NOTIFY_DIR="/home/$NEW_USER/notify"
     NOTIFY_FILE="$NOTIFY_DIR/notify.sh"
