@@ -83,6 +83,7 @@
 				output "Resolving domain names in policies..."
 				while IFS='/' read -r _ domain _; do
 					[ -n "$domain" ] && run_nslookup "$domain" &
+					sleep 0.1
 					entries="$((entries + 1))"
 				done < "$packageDnsmasqFile"
 				wait
