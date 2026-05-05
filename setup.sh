@@ -10,13 +10,37 @@ SSH_PORT_1=111
 SSH_PORT_2=1111
 SSHD_CONF="/etc/ssh/sshd_config"
 
-# Настройки проброса ssh для cascade
-CURRENT_SSH=222
-DESTINATION_SSH=111
+CURRENT_IP=$(ip route get 1.1.1.1 | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}')
 
 # ----------------------------------------
 # Функции
 # ----------------------------------------
+
+# Цветовые коды
+GREEN='\033[0;32m'
+ORANGE='\033[0;33m'
+NC='\033[0m'  # Сброс цвета
+
+function log {
+    echo -e "${GREEN}$*${NC}"
+}
+
+function read_orange {
+    # Первый аргумент — текст приглашения
+    # Второй аргумент — имя переменной (необязательно)
+    local prompt="$1"
+    local var_name="$2"
+    
+    # Выводим приглашение оранжевым цветом без перевода строки
+    echo -en "${ORANGE}${prompt}${NC}"
+    
+    # Читаем ввод
+    if [[ -n "$var_name" ]]; then
+        read -r "$var_name"
+    else
+        read -r
+    fi
+}
 
 print_header() {
     local text="$1"
@@ -216,20 +240,7 @@ EOF
     echo "Готово"
 }
 
-common_done() {
-    echo " "
-    echo "========================================="
-    echo " Базовая настройка завершена!"
-    echo " SSH-порты изменены на $SSH_PORT_1 и $SSH_PORT_2."
-    echo " Не забудьте переподключиться по новому порту."
-    echo "========================================="
-}
-
-# ----------------------------------------
-# Prepare
-# ----------------------------------------
-
-prepare_base_mode() {
+base_iptables() {
     # ----------------------------------------
     print_header "Правила iptables"
     # ----------------------------------------
@@ -253,20 +264,41 @@ EOF
     iptables-restore < /etc/iptables/rules.v4
 }
 
+common_done() {
+    echo " "
+    echo "========================================="
+    echo " Базовая настройка завершена!"
+    echo " SSH-порты изменены на $SSH_PORT_1 и $SSH_PORT_2."
+    echo " Не забудьте переподключиться по новому порту."
+    echo "========================================="
+}
+
+# ----------------------------------------
+# Prepare
+# ----------------------------------------
+
 prepare_cascade_mode() {
-    read -p "Введите IP целевой: " DESTINATION_IP
-    read -p "Введите AWG порт целевой (запомните его, желательно меньше 1000): " AWG_PORT
+    CONFIG="/etc/cascade_firewall.conf"
 
-    # ----------------------------------------
-    print_header "Текущий IP"
-    # ----------------------------------------
+    # --- Создать дефолтный конфиг, если отсутствует ---
+    if [[ ! -f "$CONFIG" ]]; then
+      cat > "$CONFIG" << 'DEFAULT'
+# icmp: on/off
+icmp off
 
-    CURRENT_IP=$(hostname -I | awk '{print $1}')
-    if [ -z "$CURRENT_IP" ]; then
-        echo "Не удалось определить IP"
-        exit 1
+# Проброс: локальный_порт  адрес:порт_назначения
+# ssh
+#forward_tcp 5111  99.99.99.99:111
+#forward_tcp 51111  99.99.99.99:1111
+
+# amnezia
+#forward_udp 401  88.88.88.88:401
+#forward_udp 402  99.99.99.99:402
+DEFAULT
+      echo "Создан дефолтный конфиг: $CONFIG"
+      echo "Отредактируйте его и запустите скрипт повторно."
+      exit 0
     fi
-    echo "Текущий IP $CURRENT_IP"
 
     # ----------------------------------------
     print_header "Включить ip_forward"
@@ -281,56 +313,105 @@ prepare_cascade_mode() {
     # И сразу в ядро (на случай, если нужно без перезагрузки)
     echo 1 > /proc/sys/net/ipv4/ip_forward
 
+    # Дефолты
+    ICMP="off"
+    SSH_PORTS=()
+    FWD_TCP=()
+    FWD_UDP=()
 
-    # ----------------------------------------
-    print_header "Правила iptables"
-    # ----------------------------------------
+    # Парсинг конфига
+    while IFS= read -r line; do
+      line="${line%%#*}"
+      [[ -z "$line" ]] && continue
+      read -r key rest <<< "$line"
+      case "$key" in
+        icmp)        ICMP="$rest" ;;
+        ssh_port)    SSH_PORTS+=("$rest") ;;
+        forward_tcp) FWD_TCP+=("$rest") ;;
+        forward_udp) FWD_UDP+=("$rest") ;;
+      esac
+    done < "$CONFIG"
 
-    systemctl enable netfilter-persistent
+    # --- SSH порты из sshd_config ---
+    SSH_PORTS=()
+    while IFS= read -r line; do
+      line="${line%%#*}"
+      [[ -z "$line" ]] && continue
+      read -r key val <<< "$line"
+      [[ "${key,,}" == "port" ]] && SSH_PORTS+=("$val")
+    done < /etc/ssh/sshd_config
+    [[ ${#SSH_PORTS[@]} -eq 0 ]] && SSH_PORTS=(22)
 
-    cat > /etc/iptables/rules.v4 << EOF
+
+
+    # --- Генерация правил ---
+    {
+    cat <<'HEADER'
 *filter
 :INPUT DROP [0:0]
 :FORWARD DROP [0:0]
 :OUTPUT ACCEPT [0:0]
-
-# Общее
 -A INPUT -i lo -j ACCEPT
--A INPUT -p icmp -m limit --limit 1/sec --limit-burst 10 -j ACCEPT
 -A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
 -A FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+HEADER
 
-# Разрешить SSH
--A INPUT -p tcp -m tcp --dport ${SSH_PORT_1} -j ACCEPT
--A INPUT -p tcp -m tcp --dport ${SSH_PORT_2} -j ACCEPT
+    if [[ "$ICMP" == "on" ]]; then
+      echo "-A INPUT -p icmp -m limit --limit 1/sec --limit-burst 10 -j ACCEPT"
+    fi
 
-# Проброс AWG соединения
--A FORWARD -p udp -d ${DESTINATION_IP} --dport ${AWG_PORT} -j ACCEPT
+    for port in "${SSH_PORTS[@]}"; do
+      echo "-A INPUT -p tcp -m tcp --dport $port -j ACCEPT"
+    done
 
-# Проброс SSH соединения
--A FORWARD -p tcp -d ${DESTINATION_IP} --dport ${DESTINATION_SSH} -j ACCEPT
+    for entry in "${FWD_TCP[@]}"; do
+      read -r lp dest <<< "$entry"
+      echo "-A FORWARD -p tcp -d ${dest%%:*} --dport ${dest##*:} -j ACCEPT"
+    done
 
-COMMIT
+    for entry in "${FWD_UDP[@]}"; do
+      read -r lp dest <<< "$entry"
+      echo "-A FORWARD -p udp -d ${dest%%:*} --dport ${dest##*:} -j ACCEPT"
+    done
 
+    echo "COMMIT"
+    echo ""
+
+    cat <<'NAT'
 *nat
 :PREROUTING ACCEPT [0:0]
 :INPUT ACCEPT [0:0]
 :OUTPUT ACCEPT [0:0]
 :POSTROUTING ACCEPT [0:0]
+NAT
 
-# Проброс AWG соединения
--A PREROUTING -p udp --dport ${AWG_PORT} -j DNAT --to-destination ${DESTINATION_IP}:${AWG_PORT}
--A POSTROUTING -p udp -d ${DESTINATION_IP} --dport ${AWG_PORT} -j SNAT --to-source ${CURRENT_IP}
+    for entry in "${FWD_TCP[@]}"; do
+      read -r lp dest <<< "$entry"
+      echo "-A PREROUTING -p tcp --dport $lp -j DNAT --to-destination $dest"
+      echo "-A POSTROUTING -p tcp -d ${dest%%:*} --dport ${dest##*:} -j SNAT --to-source $CURRENT_IP"
+    done
 
-# Проброс SSH соединения
--A PREROUTING -p tcp --dport ${CURRENT_SSH} -j DNAT --to-destination ${DESTINATION_IP}:${DESTINATION_SSH}
--A POSTROUTING -p tcp -d ${DESTINATION_IP} --dport ${DESTINATION_SSH} -j SNAT --to-source ${CURRENT_IP}
+    for entry in "${FWD_UDP[@]}"; do
+      read -r lp dest <<< "$entry"
+      echo "-A PREROUTING -p udp --dport $lp -j DNAT --to-destination $dest"
+      echo "-A POSTROUTING -p udp -d ${dest%%:*} --dport ${dest##*:} -j SNAT --to-source $CURRENT_IP"
+    done
 
-COMMIT
-EOF
+    echo "COMMIT"
 
-    # Применить правила без перезагрузки сервера
+    } > /etc/iptables/rules.v4
+
+    # Применить
+    systemctl enable netfilter-persistent 2>/dev/null
     iptables-restore < /etc/iptables/rules.v4
+
+    echo "=== Применённый конфиг ==="
+    echo "IP: $CURRENT_IP | ICMP: $ICMP | SSH (sshd_config): ${SSH_PORTS[*]}"
+    echo "TCP форварды: ${#FWD_TCP[@]} | UDP форварды: ${#FWD_UDP[@]}"
+    echo ""
+    iptables -L -n --line-numbers
+    echo ""
+    iptables -t nat -L -n --line-numbers
 }
 
 prepapre_common() {
@@ -348,6 +429,7 @@ prepapre_common() {
     disable_root_ask
     reboot_ssh
     configure_notifications
+    base_iptables
     common_done
 }
 
@@ -355,42 +437,36 @@ prepapre_common() {
 # RUN
 # ----------------------------------------
 
-# ----------------------------------------
-# В каком режиме запушено --mode base или --mode cascade
-# ----------------------------------------
+while true; do
+    clear
+    log "========================="
+    log "        МЕНЮ            "
+    log "    (что-то одно)       "
+    log "========================="
+    log "1) Базовая настройка"
+    log "2) Настрока под RU мост"
+    log "0) Выход"
+    log "========================="
+    read_orange "Выберите пункт: " choice
 
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --mode)
-            mode="$2"
-            shift 2
+    case $choice in
+        1)
+            echo "Базовая настройка"
+            prepapre_common
+            ;;
+        2)
+            echo "Настройка под RU мост"
+            prepare_cascade_mode
+            ;;
+        0)
+            log "Выход из программы."
+            exit 0
             ;;
         *)
-            echo "Неизвестный аргумент: $1"
-            exit 1
+            log "Неверный ввод. Попробуйте снова."
             ;;
     esac
+    echo
+    read_orange "Выберите пункт: " not_need_var
 done
-
-# Запуск разного кода в зависимости от mode
-case "$mode" in
-    base)
-        echo "Запуск кода для режима base"
-        prepapre_common
-        prepare_base_mode
-        ;;
-    cascade)
-        echo "Запуск кода для режима cascade"
-        prepapre_common
-        prepare_cascade_mode
-        ;;
-    "")
-        echo "Ошибка: не указан --mode (нужен base или cascade)"
-        exit 1
-        ;;
-    *)
-        echo "Ошибка: неизвестный режим '$mode'. Используйте base или cascade."
-        exit 1
-        ;;
-esac
 
