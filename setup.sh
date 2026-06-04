@@ -13,6 +13,41 @@ SSHD_CONF="/etc/ssh/sshd_config"
 CURRENT_IP=$(ip route get 1.1.1.1 | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}')
 
 # ----------------------------------------
+# Читаем аргументы если есть
+# ----------------------------------------
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --new-user)
+            NEW_USER="$2"
+            shift 2
+            ;;
+        --server-name)
+            SERVER_NAME="$2"
+            shift 2
+            ;;
+        --tg-bot-token)
+            TG_BOT_TOKEN="$2"
+            shift 2
+            ;;
+        --tg-chat-id)
+            TG_CHAT_ID="$2"
+            shift 2
+            ;;
+        --tg-proxy)
+            TG_PROXY="$2"
+            shift 2
+            ;;
+        *)
+            echo "Неизвестный параметр: $1"
+            exit 1
+            ;;
+    esac
+done
+
+
+
+# ----------------------------------------
 # Функции
 # ----------------------------------------
 
@@ -71,9 +106,7 @@ EOF
 
 get_user_input() {
     print_header "Сбор данных перед установкой"
-    read -p "Введите имя нового пользователя: " NEW_USER
-    read -p "Введите Telegram BOT_TOKEN: " TG_BOT_TOKEN
-    read -p "Введите Telegram CHAT_ID: " TG_CHAT_ID
+    [ -n "${NEW_USER:-}" ] || read -p "Введите имя нового пользователя: " NEW_USER
 }
 
 setup() {
@@ -145,7 +178,7 @@ EOF
 plan_reboot() {
     print_header "Перезагрузка раз в неделю"
     # Добавляем задание в cron для root, если его там еще нет
-    (crontab -l 2>/dev/null | grep -q "0 1 \* \* 5 /sbin/reboot") || (crontab -l 2>/dev/null; echo "0 1 * * 5 /sbin/reboot") | crontab -
+    (crontab -l 2>/dev/null | grep -q "0 1 \* \* 5 /sbin/reboot") || (crontab -l 2>/dev/null; echo "0 1 * * 5 /sbin/reboot") | crontab - || true
 }
 
 fix_hosts() {
@@ -179,7 +212,11 @@ reboot_ssh() {
 }
 
 configure_notifications() {
-    print_header "Создание скрипта уведомлений"
+    [ -n "${TG_BOT_TOKEN:-}" ] || read -p "TG_BOT_TOKEN: " TG_BOT_TOKEN
+    [ -n "${TG_CHAT_ID:-}" ] || read -p "TG_CHAT_ID: " TG_CHAT_ID
+    [ -n "${TG_PROXY:-}" ] || read -p "TG_PROXY (опционально): " TG_PROXY
+    [ -n "${SERVER_NAME:-}" ] || read -p "Имя сервера (для уведомлений): " SERVER_NAME
+
     # Проверка: если хотя бы один токен пуст → ошибка
     if [ -z "$TG_BOT_TOKEN" ] || [ -z "$TG_CHAT_ID" ]; then
         echo "Уведомления не будут созданы"
@@ -187,11 +224,53 @@ configure_notifications() {
         return 0
     fi
 
-    # 1. Создание скрипта уведомлений
-    NOTIFY_DIR="/home/$NEW_USER/notify"
-    NOTIFY_FILE="$NOTIFY_DIR/notify.sh"
+    log "Сохранение конфиг файла: /etc/tg-send"
 
-    mkdir -p "$NOTIFY_DIR"
+
+    cat > /etc/tg-send << EOF
+TG_BOT_TOKEN=$TG_BOT_TOKEN
+TG_CHAT_ID=$TG_CHAT_ID
+TG_PROXY=$TG_PROXY
+EOF
+
+    log "Сохранение рабочего скрипта: /usr/bin/tg-send" 
+    cat > /usr/bin/tg-send << 'EOF2'
+#!/bin/sh
+CONFIG="/etc/tg-send"
+
+if [ -f "$CONFIG" ]; then
+    . "$CONFIG"
+fi
+
+if [ -z "$TG_BOT_TOKEN" ] || [ -z "$TG_CHAT_ID" ]; then
+    echo "ERROR: TG_BOT_TOKEN or TG_CHAT_ID not set in $CONFIG" >&2
+    exit 1
+fi
+
+if [ $# -eq 0 ]; then
+    echo "Usage: $0 <message>" >&2
+    exit 1
+fi
+
+# объединяем все переданные аргументы в одну строку
+MSG="$*"
+HOST=${TG_PROXY:-api.telegram.org}
+
+curl -s --http1.1 -X POST "https://${HOST}/bot${TG_BOT_TOKEN}/sendMessage" \
+    --data-urlencode "chat_id=${TG_CHAT_ID}" \
+    --data-urlencode "text=${MSG}" \
+    >/dev/null 2>&1
+EOF2
+
+    chmod +x /usr/bin/tg-send
+    tg-send "test"
+    log "Отправлено тестовое сообщение"
+
+
+    print_header "Создание скрипта уведомлений при логине"
+
+    # 1. Создание скрипта уведомлений
+    NOTIFY_FILE="/usr/bin/notify-login.sh"
 
     # Внимание: переменные PAM экранированы (\$PAM_SERVICE), 
     # а токены подставятся напрямую из наших переменных bash.
@@ -207,31 +286,22 @@ if [ "\$PAM_TYPE" != "open_session" ]; then
     exit 0
 fi
 
-BOT_TOKEN="${TG_BOT_TOKEN}"
-CHAT_ID="${TG_CHAT_ID}"
-
 USER="\$PAM_USER"
 IP="\$PAM_RHOST"
 DATE=\$(date "+%d.%m.%Y %H:%M:%S")
-HOSTNAME=\$(hostname)
 
-MESSAGE="✅ srv
+MESSAGE="✅ ${SERVER_NAME}
 👤 User: \$USER
 🌐 IP: \$IP
 📅 Date: \$DATE"
 
-curl -s -X POST \\
-  https://api.telegram.org/bot\$BOT_TOKEN/sendMessage \\
-  -d chat_id=\$CHAT_ID \\
-  -d text="\$MESSAGE" \\
-  -d parse_mode="Markdown" >/dev/null 2>&1 &
-
+tg-send "\$MESSAGE"
 exit 0
 EOF
 
     # 2. Дать права и владельца
-    chmod +x "$NOTIFY_FILE"
-    chown -R "$NEW_USER:$NEW_USER" "$NOTIFY_DIR"
+    chown root:root "$NOTIFY_FILE"
+    chmod 700 "$NOTIFY_FILE"
 
     # 3. Добавить в PAM sshd (если еще не добавлено)
     if ! grep -q "pam_exec.so.*notify.sh" /etc/pam.d/sshd; then
@@ -288,8 +358,8 @@ icmp off
 
 # Проброс: локальный_порт  адрес:порт_назначения
 # ssh
-#forward_tcp 5111  99.99.99.99:111
-#forward_tcp 51111  99.99.99.99:1111
+#forward_tcp 211  99.99.99.99:111
+#forward_tcp 2111  99.99.99.99:1111
 
 # amnezia
 #forward_udp 401  88.88.88.88:401
