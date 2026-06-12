@@ -9,6 +9,21 @@ anthropic.com
 claude.ai
 claudeusercontent.com
 
+#gemini
+deepmind.com
+deepmind.google
+geller-pa.googleapis.com
+generativelanguage.googleapis.com
+proactivebackend-pa.googleapis.com
+ai.google.dev
+alkalicore-pa.clients6.google.com
+alkalimakersuite-pa.clients6.google.com
+generativeai.google
+makersuite.google.com
+aistudio.google.com
+bard.google.com
+gemini.google.com
+
 # gptchat
 chat.openai.com
 chatgpt.com
@@ -53,7 +68,6 @@ web.telegram.org
 z.telegram.org
 
 # youtube
-youtube.com
 ggpht.cn
 ggpht.com
 googleapis.com
@@ -100,6 +114,7 @@ youtube.co.uk
 youtube.co.ve
 youtube.co.za
 youtube.co.zw
+youtube.com
 youtube.com.ar
 youtube.com.au
 youtube.com.az
