@@ -166,6 +166,9 @@ fail_to_ban() {
 enabled = true
 port = $SSH_PORT_1,$SSH_PORT_2
 backend = systemd
+maxretry = 5
+findtime = 60m
+bantime = 1d
 EOF
 
     systemctl enable fail2ban
@@ -334,6 +337,33 @@ EOF
     iptables-restore < /etc/iptables/rules.v4
 }
 
+install_zram() {
+    print_header "Установка zram"
+    apt install -y zram-tools
+    systemctl enable zramswap
+    systemctl start zramswap
+    if systemctl is-active --quiet zramswap; then
+        log "[ОК] Служба zramswap успешно запущена!"
+    else
+        log "[ОШИБКА!!!] Что-то пошло не так, служба zramswap не активна."
+        exit 1
+    fi
+}
+
+optimize_net() {
+    print_header "Оптимизация сети"
+    grep -q "^net.core.default_qdisc" /etc/sysctl.conf \
+        && sed -i 's/^net.core.default_qdisc.*/net.core.default_qdisc = fq/' /etc/sysctl.conf \
+        || echo "net.core.default_qdisc = fq" | tee -a /etc/sysctl.conf > /dev/null
+
+    grep -q "^net.ipv4.tcp_congestion_control" /etc/sysctl.conf \
+        && sed -i 's/^net.ipv4.tcp_congestion_control.*/net.ipv4.tcp_congestion_control = bbr/' /etc/sysctl.conf \
+        || echo "net.ipv4.tcp_congestion_control = bbr" | tee -a /etc/sysctl.conf > /dev/null
+
+    sysctl -p
+    print_header "Оптимизация сети. Готово"
+}
+
 common_done() {
     echo " "
     echo "========================================="
@@ -341,6 +371,14 @@ common_done() {
     echo " SSH-порты изменены на $SSH_PORT_1 и $SSH_PORT_2."
     echo " Не забудьте переподключиться по новому порту."
     echo "========================================="
+}
+
+configure_logs() {
+    print_header "Хранить логи 1 день"
+    sed -i -E 's/^[# ]*MaxRetentionSec=.*/MaxRetentionSec=1d/; s/^[# ]*MaxFileSec=.*/MaxFileSec=1d/' /etc/systemd/journald.conf
+    journalctl --rotate
+    journalctl --vacuum-time=1d
+    systemctl restart systemd-journald
 }
 
 # ----------------------------------------
@@ -500,7 +538,10 @@ prepapre_common() {
     reboot_ssh
     configure_notifications
     base_iptables
+    install_zram
+    optimize_net
     common_done
+    configure_logs
 }
 
 # ----------------------------------------
@@ -536,7 +577,5 @@ while true; do
             log "Неверный ввод. Попробуйте снова."
             ;;
     esac
-    echo
-    read_orange "Выберите пункт: " not_need_var
 done
 
