@@ -45,7 +45,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-
+timedatectl set-timezone Asia/Yekaterinburg
+timedatectl
 
 # ----------------------------------------
 # Функции
@@ -94,6 +95,39 @@ check_root() {
     fi
 }
 
+update_hostname() {
+        print_header "Обновляем hostname"
+  cp /etc/hosts /etc/hosts.bak
+    hostnamectl set-hostname "$SERVER_NAME"
+cat > /etc/hosts <<EOF
+127.0.0.1 localhost
+::1 localhost
+127.0.1.1 $SERVER_NAME
+EOF
+}
+
+update_dns() {
+        print_header "Обновляем DNS"
+    RESOLV="/etc/resolv.conf"
+cat > "$RESOLV" <<EOF
+nameserver 8.8.8.8
+nameserver 8.8.4.4
+nameserver 1.1.1.1
+EOF
+    log "Обновлён $RESOLV"
+
+    INTERFACES="/etc/network/interfaces"
+    cp "$INTERFACES" "$INTERFACES.bak"
+    # Если строка dns-nameservers существует – заменяем её целиком
+    if grep -q "^[[:space:]]*dns-nameservers" "$INTERFACES"; then
+        sed -i "s/^[[:space:]]*dns-nameservers.*/    dns-nameservers $DNS/" "$INTERFACES"
+    else
+        # Если нет – добавляем после первой строки с gateway
+        sed -i "/^[[:space:]]*gateway/a\    dns-nameservers $DNS" "$INTERFACES"
+    fi
+    log "Обновлён $INTERFACES"
+}
+
 disable_ipv6() {
     print_header "Отключить IPv6"
     cat <<EOF > /etc/sysctl.d/99-disable-ipv6.conf
@@ -106,6 +140,7 @@ EOF
 
 get_user_input() {
     print_header "Сбор данных перед установкой"
+    [ -n "${SERVER_NAME:-}" ] || read -p "Введите имя сервера (hostname): " SERVER_NAME
     [ -n "${NEW_USER:-}" ] || read -p "Введите имя нового пользователя: " NEW_USER
 }
 
@@ -184,15 +219,15 @@ plan_reboot() {
     (crontab -l 2>/dev/null | grep -q "0 1 \* \* 5 /sbin/reboot") || (crontab -l 2>/dev/null; echo "0 1 * * 5 /sbin/reboot") | crontab - || true
 }
 
-fix_hosts() {
-    print_header "Уведомления и Hosts"
-    # 0. Добавляем hostname в /etc/hosts
-    CURRENT_HOSTNAME=$(hostname)
-    if ! grep -q "127.0.0.1.*$CURRENT_HOSTNAME" /etc/hosts; then
-        sed -i "s/^127.0.0.1.*/& $CURRENT_HOSTNAME/" /etc/hosts
-    fi
-    echo "Готово"
-}
+#fix_hosts() {
+#    print_header "Уведомления и Hosts"
+#    # 0. Добавляем hostname в /etc/hosts
+#    CURRENT_HOSTNAME=$(hostname)
+#    if ! grep -q "127.0.0.1.*$CURRENT_HOSTNAME" /etc/hosts; then
+#        sed -i "s/^127.0.0.1.*/& $CURRENT_HOSTNAME/" /etc/hosts
+#    fi
+#    echo "Готово"
+#}
 
 disable_root_ask() {
     print_header "Запретить вход root"
@@ -218,7 +253,6 @@ configure_notifications() {
     [ -n "${TG_BOT_TOKEN:-}" ] || read -p "TG_BOT_TOKEN: " TG_BOT_TOKEN
     [ -n "${TG_CHAT_ID:-}" ] || read -p "TG_CHAT_ID: " TG_CHAT_ID
     [ -n "${TG_PROXY:-}" ] || read -p "TG_PROXY (опционально): " TG_PROXY
-    [ -n "${SERVER_NAME:-}" ] || read -p "Имя сервера (для уведомлений): " SERVER_NAME
 
     # Проверка: если хотя бы один токен пуст → ошибка
     if [ -z "$TG_BOT_TOKEN" ] || [ -z "$TG_CHAT_ID" ]; then
@@ -524,8 +558,10 @@ NAT
 
 prepapre_common() {
     check_root
-    disable_ipv6
     get_user_input
+    update_hostname
+    update_dns
+    disable_ipv6
     setup
     create_user
     no_sudo
@@ -533,7 +569,7 @@ prepapre_common() {
     change_ssh_port
     fail_to_ban
     plan_reboot
-    fix_hosts
+    #fix_hosts
     disable_root_ask
     reboot_ssh
     configure_notifications
