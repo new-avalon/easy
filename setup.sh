@@ -120,10 +120,10 @@ EOF
     cp "$INTERFACES" "$INTERFACES.bak"
     # Если строка dns-nameservers существует – заменяем её целиком
     if grep -q "^[[:space:]]*dns-nameservers" "$INTERFACES"; then
-        sed -i "s/^[[:space:]]*dns-nameservers.*/    dns-nameservers $DNS/" "$INTERFACES"
+        sed -i "s/^[[:space:]]*dns-nameservers.*/    dns-nameservers 8.8.8.8 8.8.4.4 1.1.1.1/" "$INTERFACES"
     else
         # Если нет – добавляем после первой строки с gateway
-        sed -i "/^[[:space:]]*gateway/a\    dns-nameservers $DNS" "$INTERFACES"
+        sed -i "/^[[:space:]]*gateway/a\    dns-nameservers 8.8.8.8 8.8.4.4 1.1.1.1" "$INTERFACES"
     fi
     log "Обновлён $INTERFACES"
 }
