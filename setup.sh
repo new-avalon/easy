@@ -651,8 +651,6 @@ prepapre_common() {
 
 function action_menu_warp() {
     while true; do
-    CURRENT_IP=$(uci get network.lan.ipaddr 2>/dev/null)
-    clear
     log "========================="
     log "        Настройки WARP"
     log "========================="
@@ -703,7 +701,6 @@ done
 # ----------------------------------------
 
 while true; do
-    clear
     log "========================="
     log "        МЕНЮ            "
     log "    (что-то одно)       "
