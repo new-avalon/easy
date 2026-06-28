@@ -556,6 +556,70 @@ NAT
     iptables -t nat -L -n --line-numbers
 }
 
+prepare_warp() {
+    log "[1/6] Установка wireguard-tools..."
+    apt install -y wireguard-tools
+    log "[2/6] Загрузка wgcf..."
+    wget -O /usr/local/bin/wgcf https://github.com/ViRb3/wgcf/releases/download/v2.2.31/wgcf_2.2.31_linux_amd64
+    chmod +x /usr/local/bin/wgcf
+    log "[3/6] Регистрация и генерация профиля..."
+    cd ~
+    wgcf register --accept-tos
+    wgcf generate
+
+    PROFILE=~/wgcf-profile.conf
+    if [[ ! -f "$PROFILE" ]]; then
+        log "Файл $PROFILE не создан. Прерывание." >&2
+        exit 1
+    fi
+
+    log "[4/6] Создание /etc/wireguard/warp.conf..."
+    PRIVATE_KEY=$(grep -oP '^\s*PrivateKey\s*=\s*\K.*' "$PROFILE" | tr -d '[:space:]')
+    PUBLIC_KEY=$(grep -oP '^\s*PublicKey\s*=\s*\K.*'  "$PROFILE" | tr -d '[:space:]')
+    if [[ -z "$PRIVATE_KEY" || -z "$PUBLIC_KEY" ]]; then
+        log "Не удалось извлечь ключи из $PROFILE." >&2
+        exit 1
+    fi
+
+    mkdir -p /etc/wireguard
+    cat > /etc/wireguard/warp.conf <<EOF
+[Interface]
+PrivateKey = ${PRIVATE_KEY}
+Address = 172.16.0.2/32
+MTU = 1280
+PostUp = ip rule add ipproto tcp sport 22 table main priority 100
+PostUp = ip rule add ipproto tcp sport ${SSH_PORT_1} table main priority 100
+PostUp = ip rule add ipproto tcp sport ${SSH_PORT_2} table main priority 100
+
+PostUp = ip rule add ipproto udp sport 401-410 table main priority 100
+PreDown = ip rule del ipproto tcp sport 22 table main priority 100
+PreDown = ip rule del ipproto tcp sport ${SSH_PORT_1} table main priority 100
+PreDown = ip rule del ipproto tcp sport ${SSH_PORT_2} table main priority 100
+PreDown = ip rule del ipproto udp sport 401-410 table main priority 100
+[Peer]
+PublicKey = ${PUBLIC_KEY}
+AllowedIPs = 0.0.0.0/0
+Endpoint = engage.cloudflareclient.com:2408
+EOF
+    chmod 600 /etc/wireguard/warp.conf
+
+    log "[5/6] Удаление временных файлов..."
+    rm -f ~/wgcf-profile.conf ~/wgcf-account.toml
+
+    log "[6/6] Включение net.ipv4.ip_forward..."
+    sysctl -w net.ipv4.ip_forward=1
+
+    log
+    log "----"
+    log "Готово. Конфиг создан: /etc/wireguard/warp.conf"
+    log "----"
+    log "Временная проверка:  sudo wg-quick up warp && sleep 60 && sudo wg-quick down warp"
+    log "----"
+    log "Для автозапуска: systemctl enable wg-quick@warp"
+    log "Для автозапуска: systemctl start wg-quick@warp"
+
+}
+    
 prepapre_common() {
     check_root
     get_user_input
@@ -580,8 +644,62 @@ prepapre_common() {
     configure_logs
 }
 
+
 # ----------------------------------------
-# RUN
+# Меню WARP
+# ----------------------------------------
+
+function action_menu_warp() {
+    while true; do
+    CURRENT_IP=$(uci get network.lan.ipaddr 2>/dev/null)
+    clear
+    log "========================="
+    log "        Настройки WARP"
+    log "========================="
+    log "1) Установить"
+    log "2) Тестовый запуск на 2 минуту"
+    log "3) Разово запустить"
+    log "4) Разово остановить"
+    log "5) Сделать службу с автозапусом"
+    log "6) Удалить службу с автозапусом"
+    log "0) Назад"
+    log "========================="
+    read_orange "Выберите пункт: " choice
+
+    case $choice in
+        1)
+            prepare_warp
+            ;;
+        2)
+            wg-quick up warp && sleep 60 && sudo wg-quick down warp
+            ;;
+        3)
+            wg-quick up warp
+            ;;
+        4)
+            wg-quick down warp
+            ;;
+        5)
+            systemctl enable wg-quick@warp
+            systemctl start wg-quick@warp
+            ;;
+        6)
+            systemctl stop wg-quick@warp
+            systemctl disable wg-quick@warp
+            ;;
+        0)
+            log "Возврат в основное меню"
+            return
+            ;;
+        *)
+            log "Неверный ввод. Попробуйте снова."
+            ;;
+    esac
+done
+}
+
+# ----------------------------------------
+# RUN. Меню основное
 # ----------------------------------------
 
 while true; do
@@ -592,6 +710,7 @@ while true; do
     log "========================="
     log "1) Базовая настройка"
     log "2) Настрока под RU мост"
+    log "3) Настроить WARP"
     log "0) Выход"
     log "========================="
     read_orange "Выберите пункт: " choice
@@ -604,6 +723,10 @@ while true; do
         2)
             echo "Настройка под RU мост"
             prepare_cascade_mode
+            ;;
+        3)
+            echo "Настройки WARP"
+            action_menu_warp
             ;;
         0)
             log "Выход из программы."
