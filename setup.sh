@@ -588,11 +588,13 @@ PrivateKey = ${PRIVATE_KEY}
 Address = 172.16.0.2/32
 MTU = 1280
 PostUp = ip rule add ipproto tcp sport 22 table main priority 100
+PostUp = ip rule add ipproto tcp sport 443 table main priority 100
 PostUp = ip rule add ipproto tcp sport ${SSH_PORT_1} table main priority 100
 PostUp = ip rule add ipproto tcp sport ${SSH_PORT_2} table main priority 100
-
 PostUp = ip rule add ipproto udp sport 401-410 table main priority 100
+
 PreDown = ip rule del ipproto tcp sport 22 table main priority 100
+PreDown = ip rule del ipproto tcp sport 443 table main priority 100
 PreDown = ip rule del ipproto tcp sport ${SSH_PORT_1} table main priority 100
 PreDown = ip rule del ipproto tcp sport ${SSH_PORT_2} table main priority 100
 PreDown = ip rule del ipproto udp sport 401-410 table main priority 100
