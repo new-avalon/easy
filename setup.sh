@@ -660,6 +660,7 @@ function action_menu_warp() {
     log "4) Разово остановить"
     log "5) Сделать службу с автозапусом"
     log "6) Удалить службу с автозапусом"
+    log "7) Проверить..."
     log "0) Назад"
     log "========================="
     read_orange "Выберите пункт: " choice
@@ -684,6 +685,10 @@ function action_menu_warp() {
         6)
             systemctl stop wg-quick@warp
             systemctl disable wg-quick@warp
+            ;;
+        7)
+            log "Вызов: https://www.cloudflare.com/cdn-cgi/trace"
+            curl https://www.cloudflare.com/cdn-cgi/trace
             ;;
         0)
             log "Возврат в основное меню"
