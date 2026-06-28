@@ -45,9 +45,6 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-timedatectl set-timezone Asia/Yekaterinburg
-timedatectl
-
 # ----------------------------------------
 # Функции
 # ----------------------------------------
@@ -146,6 +143,9 @@ get_user_input() {
 
 setup() {
     print_header "Установить"
+    timedatectl set-timezone Asia/Yekaterinburg
+    timedatectl
+
     apt update -y
     apt upgrade -y
 
@@ -161,9 +161,9 @@ setup() {
 create_user() {
     print_header "Создать пользователей"
     if id "$NEW_USER"; then
-        echo "Пользователь $NEW_USER уже существует."
+        log "Пользователь $NEW_USER уже существует."
     else
-        echo "Создание пользователя $NEW_USER. Пожалуйста, задайте пароль:"
+        log "Создание пользователя $NEW_USER. Пожалуйста, задайте пароль:"
         adduser "$NEW_USER"
     fi
     usermod -aG sudo "$NEW_USER"
@@ -173,7 +173,7 @@ no_sudo() {
     print_header "Без пароля sudo"
     # Заменяем строку для группы sudo
     sed -i 's/^%sudo\s*ALL=(ALL:ALL)\s*ALL/%sudo   ALL=(ALL:ALL) NOPASSWD: ALL/' /etc/sudoers
-    echo "Права NOPASSWD для группы sudo выданы."
+    log "Права NOPASSWD для группы sudo выданы."
 }
 
 configure_updates() {
@@ -191,7 +191,7 @@ change_ssh_port() {
     echo "Port $SSH_PORT_1" >> "$SSHD_CONF"
     echo "Port $SSH_PORT_2" >> "$SSHD_CONF"
     systemctl restart ssh
-    echo "Готово"
+    log "Готово"
 }
 
 fail_to_ban() {
@@ -236,17 +236,17 @@ disable_root_ask() {
 
     if [[ "$answer" =~ ^[yY]$ ]]; then
         sed -i 's/^#*PermitRootLogin.*/PermitRootLogin no/' "$SSHD_CONF"
-        echo "Запрешено"
+        log "Запрешено"
     else
         sed -i 's/^#*PermitRootLogin.*/PermitRootLogin yes/' "$SSHD_CONF"
-        echo "Разрешено"
+        log "Разрешено"
     fi
 }
 
 reboot_ssh() {
     print_header "Перезагрузка SSH"
     systemctl restart ssh
-    echo "Готово"
+    log "Готово"
 }
 
 configure_notifications() {
@@ -256,7 +256,7 @@ configure_notifications() {
 
     # Проверка: если хотя бы один токен пуст → ошибка
     if [ -z "$TG_BOT_TOKEN" ] || [ -z "$TG_CHAT_ID" ]; then
-        echo "Уведомления не будут созданы"
+        log "Уведомления не будут созданы"
         # TODO: удалять файлы
         return 0
     fi
@@ -344,7 +344,7 @@ EOF
     if ! grep -q "pam_exec.so.*notify.sh" /etc/pam.d/sshd; then
         echo "session optional pam_exec.so $NOTIFY_FILE" >> /etc/pam.d/sshd
     fi
-    echo "Готово"
+    log "Готово"
 }
 
 base_iptables() {
@@ -437,8 +437,8 @@ icmp off
 #forward_udp 401  88.88.88.88:401
 #forward_udp 402  99.99.99.99:402
 DEFAULT
-      echo "Создан дефолтный конфиг: $CONFIG"
-      echo "Отредактируйте его и запустите скрипт повторно."
+      log "Создан дефолтный конфиг: $CONFIG"
+      log "Отредактируйте его и запустите скрипт повторно."
       exit 0
     fi
 
@@ -547,9 +547,9 @@ NAT
     systemctl enable netfilter-persistent 2>/dev/null
     iptables-restore < /etc/iptables/rules.v4
 
-    echo "=== Применённый конфиг ==="
-    echo "IP: $CURRENT_IP | ICMP: $ICMP | SSH (sshd_config): ${SSH_PORTS[*]}"
-    echo "TCP форварды: ${#FWD_TCP[@]} | UDP форварды: ${#FWD_UDP[@]}"
+    log "=== Применённый конфиг ==="
+    log "IP: $CURRENT_IP | ICMP: $ICMP | SSH (sshd_config): ${SSH_PORTS[*]}"
+    log "TCP форварды: ${#FWD_TCP[@]} | UDP форварды: ${#FWD_UDP[@]}"
     echo ""
     iptables -L -n --line-numbers
     echo ""
